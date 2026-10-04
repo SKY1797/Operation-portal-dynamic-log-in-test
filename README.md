@@ -1,4 +1,4 @@
-Dynamic Operation document portal
+Dynamic Operation document portal - testing for dynamic log-in
 
 Cache first approach for loading app faster and making available for offline use
 
