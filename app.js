@@ -11,10 +11,10 @@ let appState = {
 // Safe access for static modules
 const elecData = typeof electricalData !== 'undefined' ? electricalData : {};
 const protData = typeof protectionData !== 'undefined' ? protectionData : {};
-const empData = typeof employeeData !== 'undefined' ? employeeData : {};
 
 // DYNAMIC DOCS DATA
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwihfjnqOQdiBEoD3D-8RCBAM60sa0hXaQbn_0tZM_mVXrofR7XGXvmegxcDkQ4AQgh/exec';
+const AUTH_API_URL = 'https://script.google.com/macros/s/AKfycbwaMisE_kwAetOghpLBMoHW-cvPXO37jHugpiZgb5k0txa2cE7lGlxyIIAJnyhbhoYL/exec'; // For employee log-in check
 let docData = [];
 let isDocsLoading = false;
 let docsError = null;
@@ -43,7 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Check for an existing saved login session
     const savedUser = localStorage.getItem('opsPortalUser');
-    if (savedUser && empData[savedUser]) {
+    if (savedUser) { 
         appState.isAuthenticated = true;
         appState.module = 'HOME';
     } else {
@@ -262,15 +262,28 @@ function renderLogin() {
                 <h2 class="page-title font-mono" style="margin-bottom: 0.5rem; width: 100%;">Integrated Operation Portal</h2>
                 <p class="page-subtitle" id="loginMsg" style="margin-bottom: 2rem;">Enter Employee ID to proceed</p>
 
+                <!-- STEP 1: Enter ID -->
                 <div id="login-step-1" style="width: 100%;">
                     <input type="text" id="empIdInput" class="ui-input font-mono" placeholder="Employee ID" style="margin-bottom: 1rem; text-align: center; width: 100%; text-transform: uppercase;" autocomplete="off" onkeypress="if(event.key === 'Enter') verifyEmpId()">
-                    <button class="nav-pill-btn" style="width: 100%; justify-content: center; padding: 0.75rem;" onclick="verifyEmpId()">Next</button>
+                    <button id="btnNext" class="nav-pill-btn" style="width: 100%; justify-content: center; padding: 0.75rem;" onclick="verifyEmpId()">Next</button>
                 </div>
 
+                <!-- STEP 2: Standard Password Login -->
                 <div id="login-step-2" style="width: 100%; display: none;">
                     <input type="password" id="empPwdInput" class="ui-input" placeholder="Password" style="margin-bottom: 1rem; text-align: center; width: 100%;" onkeypress="if(event.key === 'Enter') verifyPassword()">
-                    <button class="nav-pill-btn" style="width: 100%; justify-content: center; padding: 0.75rem;" onclick="verifyPassword()">Log In</button>
+                    <button id="btnLogin" class="nav-pill-btn" style="width: 100%; justify-content: center; padding: 0.75rem;" onclick="verifyPassword()">Log In</button>
                     <button class="nav-pill-btn" style="width: 100%; justify-content: center; padding: 0.75rem; margin-top: 0.75rem; background: transparent; border: 1px solid color-mix(in srgb, var(--foreground) 20%, transparent);" onclick="resetLogin()">Back</button>
+                </div>
+
+                <!-- STEP 3: First-time Password Setup -->
+                <div id="login-step-3" style="width: 100%; display: none;">
+                    <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid #ef4444; border-radius: 0.5rem; padding: 0.75rem; margin-bottom: 1rem; font-size: 0.85rem; color: #ef4444;">
+                        Account activation required. Please set your new secure password.
+                    </div>
+                    <input type="password" id="newPwdInput" class="ui-input" placeholder="New Password" style="margin-bottom: 0.75rem; text-align: center; width: 100%;">
+                    <input type="password" id="confirmPwdInput" class="ui-input" placeholder="Confirm Password" style="margin-bottom: 1rem; text-align: center; width: 100%;" onkeypress="if(event.key === 'Enter') setNewPassword()">
+                    <button id="btnSetPwd" class="nav-pill-btn" style="width: 100%; justify-content: center; padding: 0.75rem; background: var(--module-protection);" onclick="setNewPassword()">Set Password & Log In</button>
+                    <button class="nav-pill-btn" style="width: 100%; justify-content: center; padding: 0.75rem; margin-top: 0.75rem; background: transparent; border: 1px solid color-mix(in srgb, var(--foreground) 20%, transparent);" onclick="resetLogin()">Cancel</button>
                 </div>
             </div>
         </div>
@@ -280,40 +293,135 @@ function renderLogin() {
 // Global variable to hold ID between steps
 let tempEmpId = "";
 
-window.verifyEmpId = function () {
+// Client-side SHA-256 Hashing Function
+async function hashPassword(message) {
+    const msgBuffer = new TextEncoder().encode(message);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+window.verifyEmpId = async function () {
     const idInput = document.getElementById('empIdInput').value.trim().toUpperCase();
     const msg = document.getElementById('loginMsg');
+    const btn = document.getElementById('btnNext');
 
     if (!idInput) {
         msg.innerHTML = '<span style="color: #ef4444;">Please enter an Employee ID</span>';
         return;
     }
 
-    if (empData[idInput]) {
-        tempEmpId = idInput;
-        document.getElementById('login-step-1').style.display = 'none';
-        document.getElementById('login-step-2').style.display = 'block';
-        msg.innerHTML = `Welcome, <strong>${empData[idInput].name}</strong><br><span style="font-size: 0.9em; opacity: 0.8;">Enter your password</span>`;
-        setTimeout(() => document.getElementById('empPwdInput').focus(), 50);
-    } else {
-        msg.innerHTML = '<span style="color: #ef4444;">Contact admin for access</span>';
-        document.getElementById('empIdInput').value = '';
+    btn.innerText = "Checking...";
+    btn.disabled = true;
+
+    try {
+        const response = await fetch(AUTH_API_URL, {
+            method: 'POST',
+            body: JSON.stringify({ action: "checkUser", empId: idInput })
+        });
+        const result = await response.json();
+
+        if (result.exists) {
+            tempEmpId = idInput;
+            document.getElementById('login-step-1').style.display = 'none';
+            
+            if (result.needsReset) {
+                // Route to Set Password screen
+                document.getElementById('login-step-3').style.display = 'block';
+                msg.innerHTML = `Welcome, <strong>${result.name}</strong>`;
+                setTimeout(() => document.getElementById('newPwdInput').focus(), 50);
+            } else {
+                // Route to standard Login screen
+                document.getElementById('login-step-2').style.display = 'block';
+                msg.innerHTML = `Welcome back, <strong>${result.name}</strong><br><span style="font-size: 0.9em; opacity: 0.8;">Enter your password</span>`;
+                setTimeout(() => document.getElementById('empPwdInput').focus(), 50);
+            }
+        } else {
+            msg.innerHTML = '<span style="color: #ef4444;">ID not found. Contact admin.</span>';
+            document.getElementById('empIdInput').value = '';
+        }
+    } catch (error) {
+        msg.innerHTML = '<span style="color: #ef4444;">Connection error. Try again.</span>';
+    } finally {
+        btn.innerText = "Next";
+        btn.disabled = false;
     }
 };
 
-window.verifyPassword = function () {
+window.setNewPassword = async function () {
+    const newPwd = document.getElementById('newPwdInput').value;
+    const confirmPwd = document.getElementById('confirmPwdInput').value;
+    const msg = document.getElementById('loginMsg');
+    const btn = document.getElementById('btnSetPwd');
+
+    if (newPwd.length < 6) {
+        msg.innerHTML = '<span style="color: #ef4444;">Password must be at least 6 characters</span>';
+        return;
+    }
+    if (newPwd !== confirmPwd) {
+        msg.innerHTML = '<span style="color: #ef4444;">Passwords do not match</span>';
+        return;
+    }
+
+    btn.innerText = "Saving...";
+    btn.disabled = true;
+
+    try {
+        const hashedPwd = await hashPassword(newPwd);
+        const response = await fetch(AUTH_API_URL, {
+            method: 'POST',
+            body: JSON.stringify({ action: "setPassword", empId: tempEmpId, passwordHash: hashedPwd })
+        });
+        const result = await response.json();
+
+        if (result.status === 'success') {
+            localStorage.setItem('opsPortalUser', tempEmpId);
+            localStorage.setItem('opsPortalUserName', result.name);
+            localStorage.setItem('opsPortalUserGroup', result.group || 'N/A');
+            updateState({ module: 'HOME', isAuthenticated: true }, false);
+        } else {
+            msg.innerHTML = '<span style="color: #ef4444;">Failed to save password.</span>';
+        }
+    } catch (error) {
+        msg.innerHTML = '<span style="color: #ef4444;">Connection error. Try again.</span>';
+    } finally {
+        btn.innerText = "Set Password & Log In";
+        btn.disabled = false;
+    }
+};
+
+window.verifyPassword = async function () {
     const pwdInput = document.getElementById('empPwdInput').value;
     const msg = document.getElementById('loginMsg');
+    const btn = document.getElementById('btnLogin');
 
-    if (empData[tempEmpId] && empData[tempEmpId].password === pwdInput) {
-        // Save the authenticated user to browser storage
-        localStorage.setItem('opsPortalUser', tempEmpId);
+    if (!pwdInput) return;
 
-        // Authenticate and push to HOME
-        updateState({ module: 'HOME', isAuthenticated: true }, false);
-    } else {
-        msg.innerHTML = '<span style="color: #ef4444;">Incorrect password</span>';
-        document.getElementById('empPwdInput').value = '';
+    btn.innerText = "Verifying...";
+    btn.disabled = true;
+
+    try {
+        const hashedPwd = await hashPassword(pwdInput);
+        const response = await fetch(AUTH_API_URL, {
+            method: 'POST',
+            body: JSON.stringify({ action: "loginUser", empId: tempEmpId, passwordHash: hashedPwd })
+        });
+        const result = await response.json();
+
+        if (result.status === 'success') {
+            localStorage.setItem('opsPortalUser', tempEmpId);
+            localStorage.setItem('opsPortalUserName', result.name);
+            localStorage.setItem('opsPortalUserGroup', result.group || 'N/A');
+            updateState({ module: 'HOME', isAuthenticated: true }, false);
+        } else {
+            msg.innerHTML = `<span style="color: #ef4444;">${result.message}</span>`;
+            document.getElementById('empPwdInput').value = '';
+        }
+    } catch (error) {
+        msg.innerHTML = '<span style="color: #ef4444;">Connection error. Try again.</span>';
+    } finally {
+        btn.innerText = "Log In";
+        btn.disabled = false;
     }
 };
 
@@ -321,13 +429,18 @@ window.resetLogin = function () {
     tempEmpId = "";
     document.getElementById('login-step-1').style.display = 'block';
     document.getElementById('login-step-2').style.display = 'none';
+    document.getElementById('login-step-3').style.display = 'none';
     document.getElementById('empIdInput').value = '';
     document.getElementById('empPwdInput').value = '';
+    document.getElementById('newPwdInput').value = '';
+    document.getElementById('confirmPwdInput').value = '';
     document.getElementById('loginMsg').innerText = 'Enter Employee ID to proceed';
 };
 
 window.logoutUser = function () {
     localStorage.removeItem('opsPortalUser');
+    localStorage.removeItem('opsPortalUserName');
+    localStorage.removeItem('opsPortalUserGroup');
     tempEmpId = "";
     updateState({
         module: 'LOGIN',
@@ -874,8 +987,8 @@ class CalendarApp {
 
 // ------------------------------ WALKDOWN OBSERVATION ------------------------------
 function renderObservation() {
-    const userId = localStorage.getItem('opsPortalUser');
-    const userName = (userId && empData[userId]) ? empData[userId].name : 'Unknown User';
+    const userId = localStorage.getItem('opsPortalUser') || 'Unknown';
+    const userName = localStorage.getItem('opsPortalUserName') || 'Unknown User';
 
     // Format current date for default value
     const today = new Date().toISOString().split('T')[0];
@@ -973,9 +1086,9 @@ window.submitObservation = async function (e) {
     submitBtn.disabled = true;
 
     // Get Active User
-    const userId = localStorage.getItem('opsPortalUser');
-    const userName = (userId && empData[userId]) ? empData[userId].name : 'Unknown';
-    const userGroup = (userId && empData[userId] && empData[userId].group) ? empData[userId].group : 'N/A';
+    const userId = localStorage.getItem('opsPortalUser') || 'Unknown';
+    const userName = localStorage.getItem('opsPortalUserName') || 'Unknown User';
+    const userGroup = localStorage.getItem('opsPortalUserGroup') || 'N/A';
 
     // Bundle Data
     const payload = {
